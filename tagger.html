@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3x3 Game Tagger</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f5; --card: #ffffff; --ink: #111; --ink2: #565450; --line: #ddd;
+    --accent: #9e3039; --sel: #2a78d6; --ok: #0a7f0a; --bad: #c03636;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111; --card: #1c1c1b; --ink: #f2f2f2; --ink2: #b5b3ac; --line: #333; --accent: #c96a72; --sel: #3987e5; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+  h1 { font-size: 20px; margin: 0; }
+  h1 small { color: var(--ink2); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  label { font-size: 12px; color: var(--ink2); display: block; margin-bottom: 2px; }
+  input, select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink); }
+  button { font: inherit; padding: 9px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--ink2); }
+  button:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650; }
+  button.sel { background: var(--sel); border-color: var(--sel); color: #fff; font-weight: 650; }
+  button.big { padding: 13px 15px; font-size: 16px; font-weight: 650; }
+  .clockbox { display: flex; gap: 10px; align-items: center; }
+  #clock { font-size: 34px; font-weight: 750; font-variant-numeric: tabular-nums; min-width: 110px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .steplabel { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent); margin: 10px 0 6px; }
+  #log { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #log td, #log th { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; font-variant-numeric: tabular-nums; }
+  #log th { color: var(--ink2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+  #log td button { padding: 2px 8px; font-size: 12px; }
+  .muted { color: var(--ink2); font-size: 13px; }
+  .score { font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; }
+  .hidden { display: none !important; }
+  .oncourt { font-size: 13px; color: var(--ink2); }
+  .flash { animation: fl .5s; }
+  @keyframes fl { from { background: color-mix(in srgb, var(--sel) 25%, var(--card)); } }
+  @media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>3x3 Game Tagger <small>offline · autosaves to this browser · exports CSV for analyze.py</small></h1>
+
+  <!-- setup -->
+  <div class="card" id="setup">
+    <div class="row">
+      <div><label>Game id</label><input id="gid" size="8" placeholder="S6-F"></div>
+      <div><label>Opponent</label><input id="gopp" size="14" placeholder="Poland"></div>
+      <div><label>Round</label><select id="ground"><option>Pool</option><option>Final</option><option>SF</option><option>Other</option></select></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label>Latvia roster (4, comma-separated; optional jersey number first, e.g. "3 Skreivers")</label>
+        <input id="groster" size="60" value="3 Skreivers, 2 Zviedris, 5 Karlsons, 4 Bumbieris"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div><label>Opponent players you'll reference (optional, comma-separated)</label>
+        <input id="gopproster" size="60" placeholder="e.g. Kovačević, Topalovic"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" onclick="startGame()">Start game</button>
+      <button onclick="resumeGame()" id="resumebtn">Resume saved game</button>
+      <button onclick="$('prefillfile').click()">Import prefill CSV…</button>
+      <input type="file" id="prefillfile" accept=".csv" class="hidden" onchange="importPrefill(this.files[0])">
+    </div>
+    <p class="muted" style="margin:10px 0 0">Prefill: run <code>python3 prefill.py &lt;game url&gt; -o data/game.csv</code> to pull FIBA's makes/FTs/fouls, import it here, then tag only the rest. With a prefill loaded, keep the clock roughly synced — new events are slotted into the timeline by clock.</p>
+  </div>
+
+  <!-- main -->
+  <div id="main" class="hidden">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="clockbox">
+          <span id="clock">10:00</span>
+          <button id="clockbtn" onclick="toggleClock()">Start</button>
+          <input id="clockset" size="5" placeholder="9:41">
+          <button onclick="setClock()">Set</button>
+        </div>
+        <div class="score">LAT <span id="slat">0</span> — <span id="sopp">0</span> <span id="oppname"></span></div>
+      </div>
+      <div class="oncourt" style="margin-top:8px">Resting (tap whoever just sat down): <span id="benchbtns" style="display:inline-flex;gap:6px;flex-wrap:wrap"></span></div>
+      <div class="oncourt" style="margin-top:6px">On court: <span id="oncourt">—</span></div>
+    </div>
+
+    <div class="card">
+      <div class="steplabel">1 · Who</div>
+      <div class="grid" id="whobtns"></div>
+      <div class="steplabel">2 · What</div>
+      <div class="grid" id="evbtns"></div>
+      <div id="extra" class="hidden">
+        <div class="steplabel" id="extralabel">3 · Detail</div>
+        <div class="grid" id="extrabtns"></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button onclick="undo()">↩ Undo last</button>
+        <button onclick="exportCsv()" class="primary">⬇ Export CSV</button>
+        <button onclick="endGame()">End / new game</button>
+        <span class="muted" id="count"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <table id="log"><thead><tr><th>clock</th><th>team</th><th>player</th><th>event</th><th>result</th><th>related</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const EVENTS = [
+  ['1PT make','shot1','make'], ['1PT miss','shot1','miss'],
+  ['2PT make','shot2','make'], ['2PT miss','shot2','miss'],
+  ['FT make','ft','make'],     ['FT miss','ft','miss'],
+  ['Assist','assist',''],
+  ['Turnover','to',''],        ['Off. rebound','oreb',''], ['Def. rebound','dreb',''],
+  ['Block','blk',''],          ['Steal','stl',''],
+  ['Defended','defended',''],
+  ['Foul committed','foul',''],['Foul drawn','fould',''],
+];
+let G = null;          // {id, opp, round, roster[], oppRoster[], rows[], clockLeft, running}
+let sel = null;        // selected who: {team, player}
+let tick = null;
+
+function save() { localStorage.setItem('tagger3x3', JSON.stringify(G)); }
+function load() { try { return JSON.parse(localStorage.getItem('tagger3x3')); } catch(e) { return null; } }
+
+function parseRoster(text) {
+  // "3 Skreivers, Zviedris" -> names ["Skreivers","Zviedris"], nums {Skreivers:"3"}
+  const names = [], nums = {};
+  text.split(',').map(s => s.trim()).filter(Boolean).forEach(entry => {
+    const m = entry.match(/^(\d+)\s+(.+)$/);
+    const name = m ? m[2].trim() : entry;
+    names.push(name);
+    if (m) nums[name] = m[1];
+  });
+  return { names, nums };
+}
+function lbl(name) { return G.nums && G.nums[name] ? G.nums[name] + ' · ' + name : name; }
+
+function startGame() {
+  const lat = parseRoster($('groster').value);
+  const oppR = parseRoster($('gopproster').value);
+  if (lat.names.length < 3) { alert('Enter at least 3 Latvia players'); return; }
+  G = { id: $('gid').value.trim() || 'G1', opp: $('gopp').value.trim() || 'OPP',
+        round: $('ground').value, roster: lat.names,
+        oppRoster: oppR.names, nums: Object.assign({}, lat.nums, oppR.nums),
+        rows: [], clockLeft: 600, running: false };
+  save(); initUi();
+}
+function resumeGame() {
+  const g = load();
+  if (!g) { alert('No saved game found in this browser.'); return; }
+  G = g; initUi();
+}
+function importPrefill(file) {
+  if (!file) return;
+  const roster = $('groster').value.split(',').map(s => s.trim()).filter(Boolean);
+  const reader = new FileReader();
+  reader.onload = () => {
+    const lines = reader.result.split(/\r?\n/).filter(l => l.trim());
+    const head = lines[0].split(',');
+    const col = name => head.indexOf(name);
+    if (col('event') < 0) { alert('Not a tagger CSV (no "event" column).'); return; }
+    const nums = {};
+    const rows = lines.slice(1).map(l => {
+      const v = l.split(',');
+      const player = v[col('player')] || '';
+      if (col('jersey') > -1 && player && v[col('jersey')]) nums[player] = v[col('jersey')];
+      return { clock: v[col('clock')] || '', team: v[col('team')] || 'LAT', player,
+               event: v[col('event')] || '', result: v[col('result')] || '', related: v[col('related')] || '' };
+    }).filter(r => r.event);
+    const first = lines[1].split(',');
+    const lat = parseRoster($('groster').value);
+    G = { id: first[col('game')] || 'G1', opp: first[col('opponent')] || 'OPP', round: first[col('round')] || 'Pool',
+          roster: lat.names, oppRoster: [...new Set(rows.filter(r => r.team === 'OPP' && r.player).map(r => r.player))],
+          nums: Object.assign(nums, lat.nums),
+          rows, clockLeft: 600, running: false, prefilled: true };
+    save(); initUi();
+  };
+  reader.readAsText(file);
+}
+function clockSecs(c) { const v = (c || '').split(':'); return v.length === 2 ? (+v[0]) * 60 + (+v[1]) : null; }
+function initUi() {
+  $('setup').classList.add('hidden'); $('main').classList.remove('hidden');
+  $('oppname').textContent = G.opp;
+  renderWho(); renderEvents(); renderBench(); renderLog(); renderClock(); renderScore();
+}
+
+function currentBench() {
+  for (let i = G.rows.length - 1; i >= 0; i--)
+    if (G.rows[i].event === 'bench') return G.rows[i].player;
+  return null;
+}
+function renderBench() {
+  const box = $('benchbtns'); box.innerHTML = '';
+  const cur = currentBench();
+  G.roster.forEach(p => {
+    const b = document.createElement('button');
+    b.textContent = lbl(p);
+    if (p === cur) b.classList.add('sel');
+    b.onclick = () => commit({ clock: clockStr(), team: 'LAT', player: p, event: 'bench', result: '', related: '' });
+    box.appendChild(b);
+  });
+}
+
+function renderWho() {
+  const box = $('whobtns'); box.innerHTML = '';
+  G.roster.forEach(p => box.appendChild(whoBtn('LAT', p)));
+  G.oppRoster.forEach(p => box.appendChild(whoBtn('OPP', p)));
+  const anon = whoBtn('OPP', ''); anon.textContent = 'OPP (no name)'; box.appendChild(anon);
+  const add = document.createElement('button');
+  add.textContent = '+ Add OPP player';
+  add.onclick = () => { const n = $('newopp').value.trim(); if (n) { $('newopp').value = ''; G.oppRoster.push(n); save(); renderWho(); } };
+  const inp = document.createElement('input'); inp.id = 'newopp'; inp.placeholder = 'opponent name';
+  inp.style.flex = '1'; inp.style.minWidth = '0';
+  const wrapEl = document.createElement('div');
+  wrapEl.style.display = 'flex'; wrapEl.style.gap = '6px'; wrapEl.style.gridColumn = '1 / -1';
+  wrapEl.appendChild(inp); wrapEl.appendChild(add); box.appendChild(wrapEl);
+}
+function whoBtn(team, player) {
+  const b = document.createElement('button');
+  b.textContent = team === 'LAT' ? lbl(player) : 'OPP ' + lbl(player);
+  b.className = 'big';
+  b.onclick = () => { sel = { team, player };
+    [...$('whobtns').children].forEach(x => x.classList && x.classList.remove('sel'));
+    b.classList.add('sel'); };
+  return b;
+}
+function renderEvents() {
+  const box = $('evbtns'); box.innerHTML = '';
+  EVENTS.forEach(([label, ev, res]) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.className = 'big';
+    b.onclick = () => onEvent(ev, res);
+    box.appendChild(b);
+  });
+}
+
+let lastAction = null;   // {type:'row'} or {type:'attach', i, prev} — for undo
+
+function onEvent(ev, res) {
+  if (!sel) { alert('Pick a player first (step 1).'); return; }
+  if (ev === 'assist' || ev === 'defended') {
+    if (sel.team !== 'LAT') { alert('Assist/Defended are tagged for Latvia players.'); return; }
+    // attach this player to the most recent qualifying shot at/before the current clock:
+    //   assist   -> made LAT field goal (crediting the passer)
+    //   defended -> OPP field goal attempt, made or missed (crediting the defender)
+    const wantTeam = ev === 'assist' ? 'LAT' : 'OPP';
+    const now = G.clockLeft;
+    let target = -1;
+    for (let i = 0; i < G.rows.length; i++) {
+      const r = G.rows[i];
+      const cs = clockSecs(r.clock);
+      if (r.team === wantTeam && (r.event === 'shot1' || r.event === 'shot2')
+          && (ev === 'defended' ? (r.result === 'make' || r.result === 'miss') : r.result === 'make')
+          && r.player !== sel.player && (cs === null || cs >= now - 5)) target = i;
+    }
+    if (target < 0) { alert(ev === 'assist' ? 'No prior made Latvia shot found to attach this assist to.'
+                                            : 'No prior opponent shot found to attach this defender to.'); return; }
+    const t = G.rows[target];
+    const roleWord = ev === 'assist' ? 'assister' : 'defender';
+    if (t.related && !confirm(`That shot (${t.clock} ${t.player}) already has ${roleWord} "${t.related}". Replace?`)) return;
+    lastAction = { type: 'attach', i: target, prev: t.related };
+    t.related = sel.player;
+    save(); renderLog();
+    $('log').classList.add('flash'); setTimeout(() => $('log').classList.remove('flash'), 500);
+    return;
+  }
+  const base = { clock: clockStr(), team: sel.team, player: sel.player, event: ev, result: res, related: '' };
+  // step 3 flows
+  if (sel.team === 'LAT' && (ev === 'shot1' || ev === 'shot2') && res === 'make') {
+    askExtra('Assisted by?', G.roster.filter(p => p !== sel.player).concat(['(unassisted)']),
+      v => { base.related = v === '(unassisted)' ? '' : v; commit(base); });
+    return;
+  }
+  commit(base);
+}
+function askExtra(label, options, done, allowType) {
+  $('extra').classList.remove('hidden');
+  $('extralabel').textContent = '3 · ' + label;
+  const box = $('extrabtns'); box.innerHTML = '';
+  options.forEach(o => {
+    const b = document.createElement('button'); b.textContent = lbl(o); b.className = 'big';
+    b.onclick = () => { $('extra').classList.add('hidden'); done(o); };
+    box.appendChild(b);
+  });
+  if (allowType) {
+    const inp = document.createElement('input'); inp.placeholder = 'type name'; inp.size = 10;
+    const ok = document.createElement('button'); ok.textContent = 'OK';
+    ok.onclick = () => { $('extra').classList.add('hidden'); done(inp.value.trim()); };
+    const w = document.createElement('div'); w.style.display = 'flex'; w.style.gap = '4px';
+    w.appendChild(inp); w.appendChild(ok); box.appendChild(w);
+  }
+}
+function commit(row) {
+  if (G.prefilled && clockSecs(row.clock) !== null) {
+    // keep the timeline chronological: insert after the last row that is
+    // earlier-or-equal in game time (higher or equal remaining clock)
+    let i = G.rows.length;
+    while (i > 0) {
+      const prev = clockSecs(G.rows[i - 1].clock);
+      if (prev === null || prev >= clockSecs(row.clock)) break;
+      i--;
+    }
+    G.rows.splice(i, 0, row);
+  } else {
+    G.rows.push(row);
+  }
+  lastAction = { type: 'row', row };
+  save(); renderLog(); renderScore(); renderBench();
+  $('log').classList.add('flash'); setTimeout(() => $('log').classList.remove('flash'), 500);
+}
+function undo() {
+  if (lastAction && lastAction.type === 'attach') {
+    G.rows[lastAction.i].related = lastAction.prev;
+  } else if (lastAction && lastAction.type === 'row') {
+    const i = G.rows.lastIndexOf(lastAction.row);
+    if (i > -1) G.rows.splice(i, 1);
+  } else {
+    G.rows.pop();               // fallback (e.g. after page reload)
+  }
+  lastAction = null;
+  save(); renderLog(); renderScore(); renderBench();
+}
+function delRow(i) { G.rows.splice(i, 1); save(); renderLog(); renderScore(); renderBench(); }
+
+function renderLog() {
+  const tb = $('log').querySelector('tbody'); tb.innerHTML = '';
+  G.rows.slice(-30).forEach((r, idx) => {
+    const i = G.rows.length - Math.min(30, G.rows.length) + idx;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.clock}</td><td>${r.team}</td><td>${r.player}</td><td>${r.event}</td><td>${r.result}</td><td>${r.related}</td>`;
+    const td = document.createElement('td'); const b = document.createElement('button');
+    b.textContent = '✕'; b.onclick = () => delRow(i); td.appendChild(b); tr.appendChild(td);
+    tb.prepend(tr);
+  });
+  $('count').textContent = G.rows.length + ' events';
+  const bench = currentBench();
+  $('oncourt').textContent = bench
+    ? G.roster.filter(p => p !== bench).map(lbl).join(', ')
+    : '— (tap who starts on the bench)';
+}
+function renderScore() {
+  const pts = { shot1: 1, shot2: 2, ft: 1 };
+  let l = 0, o = 0;
+  G.rows.forEach(r => { if (pts[r.event] && r.result === 'make') (r.team === 'LAT' ? l += pts[r.event] : o += pts[r.event]); });
+  $('slat').textContent = l; $('sopp').textContent = o;
+}
+
+/* clock */
+function clockStr() { const s = Math.max(0, Math.round(G.clockLeft)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function renderClock() { $('clock').textContent = clockStr(); $('clockbtn').textContent = G.running ? 'Pause' : 'Start'; }
+function toggleClock() {
+  G.running = !G.running;
+  if (G.running) tick = setInterval(() => { G.clockLeft = Math.max(0, G.clockLeft - 1); renderClock(); if (G.clockLeft % 10 === 0) save(); }, 1000);
+  else { clearInterval(tick); save(); }
+  renderClock();
+}
+function setClock() {
+  const v = $('clockset').value.trim().split(':');
+  if (v.length === 2) { G.clockLeft = (+v[0]) * 60 + (+v[1]); save(); renderClock(); }
+}
+
+/* export */
+function exportCsv() {
+  const esc = s => /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  let csv = 'game,opponent,round,clock,team,player,event,result,related\n';
+  G.rows.forEach(r => {
+    csv += [G.id, G.opp, G.round, r.clock, r.team, r.player, r.event, r.result, r.related].map(x => esc(String(x))).join(',') + '\n';
+  });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = `${G.id}_${G.opp}.csv`.replace(/\s+/g, '');
+  a.click();
+}
+function endGame() {
+  if (G.rows.length && !confirm('Export done? Starting a new game clears this one from the browser.')) return;
+  localStorage.removeItem('tagger3x3'); G = null;
+  $('main').classList.add('hidden'); $('setup').classList.remove('hidden');
+}
+</script>
+</body>
+</html>
