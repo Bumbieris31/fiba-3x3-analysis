@@ -70,6 +70,9 @@ https://claude.ai/code/artifact/161aa244-9183-4671-aeda-89efcda4aec3
 
 ## Files
 
+- `methodology.md` — the counting rules and judgment calls (what qualifies as
+  a steal, the rebound control test, held balls, …); update it whenever a new
+  situation forces a decision
 - `tagger.html` — offline tagging UI, exports the event-log CSV
 - `prefill.py` — pulls FIBA's play-by-play for a game into a starter CSV
 - `data/prefills/` — starter CSVs for all 18 games of the 2026 season

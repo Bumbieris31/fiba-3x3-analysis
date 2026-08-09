@@ -76,6 +76,32 @@ def main(paths):
     if not rows:
         sys.exit("No event rows found. Pass CSV files or a directory.")
     games = sorted({r['game'] for r in rows})
+
+    # Merge foul attributions: a player-named LAT foul row tagged within 20s of
+    # a team-level (blank-player) foul row is the same foul recorded twice -
+    # one from FIBA's prefill, one from the tagger. Keep the named row, drop
+    # the blank twin, so team-foul counts aren't doubled. (Current tagger
+    # versions attach the player in place; this handles older exports.)
+    drop = set()
+    for g in games:
+        fouls = [(i, r) for i, r in enumerate(rows)
+                 if r['game'] == g and r['team'] == 'LAT' and r['event'] == 'foul']
+        blanks = [(i, r) for i, r in fouls if not r['player']]
+        for i, r in fouls:
+            if r['player'] and r['elapsed'] is not None:
+                best = None
+                for j, b in blanks:
+                    if j in drop or b['elapsed'] is None:
+                        continue
+                    d = abs(b['elapsed'] - r['elapsed'])
+                    if d <= 20 and (best is None or d < best[1]):
+                        best = (j, d)
+                if best:
+                    drop.add(best[0])
+    if drop:
+        rows = [r for i, r in enumerate(rows) if i not in drop]
+        print(f'(merged {len(drop)} team-level foul rows with their player attributions)')
+
     lat = [r for r in rows if r['team'] == 'LAT']
     opp = [r for r in rows if r['team'] == 'OPP']
     players = sorted({r['player'] for r in lat if r['player'] and r['event'] not in ('matchup',)})
@@ -193,7 +219,7 @@ def main(paths):
         if len(fl) >= 7:
             r7 = fl[6]
             when = f" at {r7['clock']} on the clock" if r7['elapsed'] is not None else ''
-            print(f"  {g}: entered penalty (7th team foul){when}, committed by {r7['player']}")
+            print(f"  {g}: entered penalty (7th team foul){when}, committed by {r7['player'] or '(unattributed)'}")
 
     # ---------------- possessions & clock ----------------
     header('POSSESSIONS & SHOT-CLOCK PROXY')

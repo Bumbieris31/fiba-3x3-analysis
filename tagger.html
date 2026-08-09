@@ -25,6 +25,8 @@
   button { font: inherit; padding: 9px 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); cursor: pointer; }
   button:hover { border-color: var(--ink2); }
   button:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+  button:disabled { opacity: .35; cursor: default; }
+  button:disabled:hover { border-color: var(--line); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 650; }
   button.sel { background: var(--sel); border-color: var(--sel); color: #fff; font-weight: 650; }
   button.big { padding: 13px 15px; font-size: 16px; font-weight: 650; }
@@ -42,6 +44,11 @@
   .oncourt { font-size: 13px; color: var(--ink2); }
   .flash { animation: fl .5s; }
   @keyframes fl { from { background: color-mix(in srgb, var(--sel) 25%, var(--card)); } }
+  button.btn-pos { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); background: color-mix(in srgb, var(--ok) 9%, var(--card)); }
+  button.btn-neg { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); background: color-mix(in srgb, var(--bad) 9%, var(--card)); }
+  #log tr.pos td { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  #log tr.neg td { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  #log tr.latest td { background: color-mix(in srgb, var(--sel) 22%, transparent); }
   @media (prefers-reduced-motion: reduce) { .flash { animation: none; } }
 </style>
 </head>
@@ -80,10 +87,13 @@
         <div class="clockbox">
           <span id="clock">10:00</span>
           <button id="clockbtn" onclick="toggleClock()">Start</button>
-          <input id="clockset" size="5" placeholder="9:41">
+          <input id="clockset" size="5" placeholder="9:41" onkeydown="if(event.key==='Enter')setClock()">
           <button onclick="setClock()">Set</button>
         </div>
-        <div class="score">LAT <span id="slat">0</span> — <span id="sopp">0</span> <span id="oppname"></span></div>
+        <div style="text-align:right">
+          <div class="score">LAT <span id="slat">0</span> — <span id="sopp">0</span> <span id="oppname"></span></div>
+          <div class="muted" id="sfouls" style="font-size:12.5px"></div>
+        </div>
       </div>
       <div class="oncourt" style="margin-top:8px">Resting (tap whoever just sat down): <span id="benchbtns" style="display:inline-flex;gap:6px;flex-wrap:wrap"></span></div>
       <div class="oncourt" style="margin-top:6px">On court: <span id="oncourt">—</span></div>
@@ -107,7 +117,9 @@
     </div>
 
     <div class="card">
+      <div style="max-height:360px;overflow-y:auto">
       <table id="log"><thead><tr><th>clock</th><th>team</th><th>player</th><th>event</th><th>result</th><th>related</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
     </div>
   </div>
 </div>
@@ -116,15 +128,23 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const EVENTS = [
-  ['1PT make','shot1','make'], ['1PT miss','shot1','miss'],
-  ['2PT make','shot2','make'], ['2PT miss','shot2','miss'],
-  ['FT make','ft','make'],     ['FT miss','ft','miss'],
-  ['Assist','assist',''],
-  ['Turnover','to',''],        ['Off. rebound','oreb',''], ['Def. rebound','dreb',''],
-  ['Block','blk',''],          ['Steal','stl',''],
-  ['Defended','defended',''],
-  ['Foul committed','foul',''],['Foul drawn','fould',''],
+  ['1PT make','shot1','make','pos'], ['1PT miss','shot1','miss','neg'],
+  ['2PT make','shot2','make','pos'], ['2PT miss','shot2','miss','neg'],
+  ['FT make','ft','make','pos'],     ['FT miss','ft','miss','neg'],
+  ['Assist','assist','','pos'],
+  ['Turnover','to','','neg'],        ['Off. rebound','oreb','','pos'], ['Def. rebound','dreb','','pos'],
+  ['Block','blk','','pos'],          ['Steal','stl','','pos'],
+  ['Defended','defended','',''],
+  ['Foul committed','foul','','neg'],['Foul drawn','fould','','pos'],
 ];
+function polarity(r) {
+  let p = '';
+  if (r.event === 'to' || r.event === 'foul' || r.result === 'miss') p = 'neg';
+  else if (r.result === 'make' || ['oreb','dreb','blk','stl','fould'].includes(r.event)) p = 'pos';
+  if (!p) return '';
+  if (r.team === 'OPP') p = (p === 'pos' ? 'neg' : 'pos');   // their make hurts us, their foul helps
+  return p;
+}
 let G = null;          // {id, opp, round, roster[], oppRoster[], rows[], clockLeft, running}
 let sel = null;        // selected who: {team, player}
 let tick = null;
@@ -195,18 +215,29 @@ function initUi() {
 }
 
 function currentBench() {
-  for (let i = G.rows.length - 1; i >= 0; i--)
-    if (G.rows[i].event === 'bench') return G.rows[i].player;
-  return null;
+  // bench state AS OF the current clock: the latest bench row at/before now
+  let best = null;
+  for (const r of G.rows) {
+    if (r.event !== 'bench') continue;
+    const cs = clockSecs(r.clock);
+    if (cs === null || cs >= G.clockLeft) best = r.player;
+  }
+  return best;
 }
+let benchShown = null;   // re-render guard for the ticking clock
 function renderBench() {
   const box = $('benchbtns'); box.innerHTML = '';
   const cur = currentBench();
+  benchShown = cur;
   G.roster.forEach(p => {
     const b = document.createElement('button');
     b.textContent = lbl(p);
     if (p === cur) b.classList.add('sel');
-    b.onclick = () => commit({ clock: clockStr(), team: 'LAT', player: p, event: 'bench', result: '', related: '' });
+    b.onclick = () => {
+      if (sel && sel.player === p) sel = null;
+      commit({ clock: clockStr(), team: 'LAT', player: p, event: 'bench', result: '', related: '' });
+      renderWho();
+    };
     box.appendChild(b);
   });
 }
@@ -216,35 +247,56 @@ function renderWho() {
   G.roster.forEach(p => box.appendChild(whoBtn('LAT', p)));
   G.oppRoster.forEach(p => box.appendChild(whoBtn('OPP', p)));
   const anon = whoBtn('OPP', ''); anon.textContent = 'OPP (no name)'; box.appendChild(anon);
+  const parseEntry = v => { const m = v.trim().match(/^(\d+)\s+(.+)$/); return m ? { num: m[1], name: m[2].trim() } : { num: null, name: v.trim() }; };
   const add = document.createElement('button');
   add.textContent = '+ Add OPP player';
-  add.onclick = () => { const n = $('newopp').value.trim(); if (n) { $('newopp').value = ''; G.oppRoster.push(n); save(); renderWho(); } };
-  const inp = document.createElement('input'); inp.id = 'newopp'; inp.placeholder = 'opponent name';
+  add.onclick = () => {
+    const e = parseEntry($('newopp').value); if (!e.name) return;
+    $('newopp').value = '';
+    if (!G.oppRoster.includes(e.name)) G.oppRoster.push(e.name);
+    if (e.num) G.nums[e.name] = e.num;
+    save(); renderWho();
+  };
+  const rem = document.createElement('button');
+  rem.textContent = '− Remove';
+  rem.onclick = () => {
+    const e = parseEntry($('newopp').value); if (!e.name) return;
+    const i = G.oppRoster.indexOf(e.name);
+    if (i < 0) { alert(`No opponent named "${e.name}" to remove.`); return; }
+    G.oppRoster.splice(i, 1); delete G.nums[e.name];
+    if (sel && sel.player === e.name) sel = null;
+    $('newopp').value = '';
+    save(); renderWho();
+  };
+  const inp = document.createElement('input'); inp.id = 'newopp'; inp.placeholder = 'opponent, e.g. "7 Petrov"';
   inp.style.flex = '1'; inp.style.minWidth = '0';
   const wrapEl = document.createElement('div');
   wrapEl.style.display = 'flex'; wrapEl.style.gap = '6px'; wrapEl.style.gridColumn = '1 / -1';
-  wrapEl.appendChild(inp); wrapEl.appendChild(add); box.appendChild(wrapEl);
+  wrapEl.appendChild(inp); wrapEl.appendChild(add); wrapEl.appendChild(rem); box.appendChild(wrapEl);
 }
 function whoBtn(team, player) {
   const b = document.createElement('button');
   b.textContent = team === 'LAT' ? lbl(player) : 'OPP ' + lbl(player);
   b.className = 'big';
+  if (team === 'LAT' && player === currentBench()) b.disabled = true;
+  if (sel && sel.team === team && sel.player === player) b.classList.add('sel');
   b.onclick = () => { sel = { team, player };
-    [...$('whobtns').children].forEach(x => x.classList && x.classList.remove('sel'));
+    [...$('whobtns').querySelectorAll('button')].forEach(x => x.classList.remove('sel'));
     b.classList.add('sel'); };
   return b;
 }
 function renderEvents() {
   const box = $('evbtns'); box.innerHTML = '';
-  EVENTS.forEach(([label, ev, res]) => {
+  EVENTS.forEach(([label, ev, res, pol]) => {
     const b = document.createElement('button');
-    b.textContent = label; b.className = 'big';
+    b.textContent = label; b.className = 'big' + (pol ? ' btn-' + pol : '');
     b.onclick = () => onEvent(ev, res);
     box.appendChild(b);
   });
 }
 
 let lastAction = null;   // {type:'row'} or {type:'attach', i, prev} — for undo
+let lastTouched = null;  // row object most recently added/attached — highlighted in the log
 
 function onEvent(ev, res) {
   if (!sel) { alert('Pick a player first (step 1).'); return; }
@@ -270,9 +322,44 @@ function onEvent(ev, res) {
     if (t.related && !confirm(`That shot (${t.clock} ${t.player}) already has ${roleWord} "${t.related}". Replace?`)) return;
     lastAction = { type: 'attach', i: target, prev: t.related };
     t.related = sel.player;
+    lastTouched = t;
     save(); renderLog();
     $('log').classList.add('flash'); setTimeout(() => $('log').classList.remove('flash'), 500);
     return;
+  }
+  if (ev === 'foul' && sel.team === 'LAT') {
+    // FIBA's prefilled foul rows are team-level; attributing one means filling in
+    // its player, not adding a second row (which would double the team-foul count)
+    const now = G.clockLeft;
+    // among unattributed team fouls, prefer the one closest at-or-before the
+    // current clock; fall back to one up to 10s "ahead" (clock drift). Fouls
+    // cluster in time, so closeness matters more than recency here.
+    let target = -1, bestPast = null, bestAhead = null;
+    for (let i = 0; i < G.rows.length; i++) {
+      const r = G.rows[i];
+      if (!(r.team === 'LAT' && r.event === 'foul' && !r.player)) continue;
+      const cs = clockSecs(r.clock);
+      if (cs === null) { target = i; continue; }
+      if (cs >= now && (bestPast === null || cs < bestPast)) { bestPast = cs; target = i; }
+    }
+    if (bestPast === null && target < 0) {
+      for (let i = 0; i < G.rows.length; i++) {
+        const r = G.rows[i];
+        if (!(r.team === 'LAT' && r.event === 'foul' && !r.player)) continue;
+        const cs = clockSecs(r.clock);
+        if (cs !== null && cs >= now - 10 && cs < now && (bestAhead === null || cs > bestAhead)) { bestAhead = cs; target = i; }
+      }
+    }
+    if (target > -1) {
+      const t = G.rows[target];
+      lastAction = { type: 'attach-player', i: target };
+      t.player = sel.player;
+      lastTouched = t;
+      save(); renderLog();
+      $('log').classList.add('flash'); setTimeout(() => $('log').classList.remove('flash'), 500);
+      return;
+    }
+    // no prefilled foul nearby (manual game / FIBA missed it) -> falls through to a new row
   }
   const base = { clock: clockStr(), team: sel.team, player: sel.player, event: ev, result: res, related: '' };
   // step 3 flows
@@ -315,12 +402,15 @@ function commit(row) {
     G.rows.push(row);
   }
   lastAction = { type: 'row', row };
+  lastTouched = row;
   save(); renderLog(); renderScore(); renderBench();
   $('log').classList.add('flash'); setTimeout(() => $('log').classList.remove('flash'), 500);
 }
 function undo() {
   if (lastAction && lastAction.type === 'attach') {
     G.rows[lastAction.i].related = lastAction.prev;
+  } else if (lastAction && lastAction.type === 'attach-player') {
+    G.rows[lastAction.i].player = '';
   } else if (lastAction && lastAction.type === 'row') {
     const i = G.rows.lastIndexOf(lastAction.row);
     if (i > -1) G.rows.splice(i, 1);
@@ -328,16 +418,24 @@ function undo() {
     G.rows.pop();               // fallback (e.g. after page reload)
   }
   lastAction = null;
-  save(); renderLog(); renderScore(); renderBench();
+  lastTouched = null;
+  save(); renderLog(); renderScore(); renderBench(); renderWho();
 }
-function delRow(i) { G.rows.splice(i, 1); save(); renderLog(); renderScore(); renderBench(); }
+function delRow(i) { G.rows.splice(i, 1); save(); renderLog(); renderScore(); renderBench(); renderWho(); }
 
 function renderLog() {
   const tb = $('log').querySelector('tbody'); tb.innerHTML = '';
-  G.rows.slice(-30).forEach((r, idx) => {
-    const i = G.rows.length - Math.min(30, G.rows.length) + idx;
+  G.rows.forEach((r, i) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${r.clock}</td><td>${r.team}</td><td>${r.player}</td><td>${r.event}</td><td>${r.result}</td><td>${r.related}</td>`;
+    tr.className = r === lastTouched ? 'latest' : polarity(r);
+    const tdc = document.createElement('td');
+    tdc.textContent = r.clock || '—';
+    tdc.title = 'Click to edit time'; tdc.style.cursor = 'pointer'; tdc.style.textDecoration = 'underline dotted';
+    tdc.onclick = () => editClock(i, tdc);
+    tr.appendChild(tdc);
+    ['team', 'player', 'event', 'result', 'related'].forEach(k => {
+      const td = document.createElement('td'); td.textContent = r[k]; tr.appendChild(td);
+    });
     const td = document.createElement('td'); const b = document.createElement('button');
     b.textContent = '✕'; b.onclick = () => delRow(i); td.appendChild(b); tr.appendChild(td);
     tb.prepend(tr);
@@ -348,11 +446,46 @@ function renderLog() {
     ? G.roster.filter(p => p !== bench).map(lbl).join(', ')
     : '— (tap who starts on the bench)';
 }
+function editClock(i, td) {
+  const r = G.rows[i];
+  td.textContent = '';
+  const inp = document.createElement('input');
+  inp.value = r.clock; inp.style.width = '64px';
+  let done = false;
+  const finish = commit => {
+    if (done) return; done = true;
+    const v = inp.value.trim();
+    if (commit && /^\d{1,2}:\d{2}$/.test(v) && v !== r.clock) {
+      const row = G.rows.splice(i, 1)[0];
+      row.clock = v;
+      let j = G.rows.length;
+      while (j > 0) {
+        const prev = clockSecs(G.rows[j - 1].clock);
+        if (prev === null || prev >= clockSecs(v)) break;
+        j--;
+      }
+      G.rows.splice(j, 0, row);
+      save();
+    }
+    renderLog(); renderBench();
+  };
+  inp.onkeydown = e => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+  inp.onblur = () => finish(true);
+  td.appendChild(inp); inp.focus(); inp.select();
+}
+
 function renderScore() {
+  // score and team fouls AS OF the current clock — prefilled future events don't count yet
   const pts = { shot1: 1, shot2: 2, ft: 1 };
-  let l = 0, o = 0;
-  G.rows.forEach(r => { if (pts[r.event] && r.result === 'make') (r.team === 'LAT' ? l += pts[r.event] : o += pts[r.event]); });
+  let l = 0, o = 0, lf = 0, of = 0;
+  G.rows.forEach(r => {
+    const cs = clockSecs(r.clock);
+    if (cs !== null && cs < G.clockLeft) return;      // hasn't happened yet at this clock
+    if (pts[r.event] && r.result === 'make') (r.team === 'LAT' ? l += pts[r.event] : o += pts[r.event]);
+    if (r.event === 'foul') (r.team === 'LAT' ? lf++ : of++);
+  });
   $('slat').textContent = l; $('sopp').textContent = o;
+  $('sfouls').textContent = `at ${clockStr()} · team fouls ${lf}–${of}`;
 }
 
 /* clock */
@@ -360,13 +493,21 @@ function clockStr() { const s = Math.max(0, Math.round(G.clockLeft)); return Mat
 function renderClock() { $('clock').textContent = clockStr(); $('clockbtn').textContent = G.running ? 'Pause' : 'Start'; }
 function toggleClock() {
   G.running = !G.running;
-  if (G.running) tick = setInterval(() => { G.clockLeft = Math.max(0, G.clockLeft - 1); renderClock(); if (G.clockLeft % 10 === 0) save(); }, 1000);
+  if (G.running) tick = setInterval(() => {
+    G.clockLeft = Math.max(0, G.clockLeft - 1);
+    renderClock(); renderScore();
+    if (currentBench() !== benchShown) { renderBench(); renderWho(); }
+    if (G.clockLeft % 10 === 0) save();
+  }, 1000);
   else { clearInterval(tick); save(); }
   renderClock();
 }
 function setClock() {
-  const v = $('clockset').value.trim().split(':');
-  if (v.length === 2) { G.clockLeft = (+v[0]) * 60 + (+v[1]); save(); renderClock(); }
+  const v = $('clockset').value.trim().split(/[:.\s]+/);   // 9:41, 9.41, "9 41" all work
+  if (v.length === 2 && v[0] !== '' && v[1] !== '') {
+    G.clockLeft = (+v[0]) * 60 + (+v[1]);
+    save(); renderClock(); renderScore(); renderBench(); renderWho(); renderLog();
+  }
 }
 
 /* export */
