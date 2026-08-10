@@ -23,6 +23,15 @@ make a normal play. Tips, bats, and mid-air saves are not rebounds.
 General principle: when in doubt about control, don't credit the touch.
 Rebound requires control; turnover requires losing control you actually had.
 
+## Turnovers — who gets charged
+
+- Bad pass (intercepted, thrown away, out of bounds): the **passer**.
+- Catchable pass fumbled or lost after the catch: the **receiver**.
+- Travels, offensive fouls, 12-second violations, stepping out: the player
+  **with the ball**.
+- Genuinely fuzzy: charge the player who had the last reasonable chance to
+  save the play.
+
 ## Held balls
 
 There is no possession arrow in 3x3 — **the defense always wins a held ball**.
